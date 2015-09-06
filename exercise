@@ -1,0 +1,275 @@
+
+---------------------------------------------------------------
+work.h
+---------------------------------------------------------------
+/*
+ * work.h
+ *
+ *  Created on: 2014骞�6鏈�17鏃�
+ *      Author: xugangLu
+ */
+
+#ifndef WORK_H_
+#define WORK_H_
+
+#define CLIENTCOUNT 256
+#define BODYBUF 1024
+
+struct msg_t
+{
+	unsigned char head[4];
+	char body[BODYBUF];
+};
+
+class work
+{
+public:
+	work(int port);
+	~work();
+	void run();
+
+private:
+	int socket_create(int);
+	int setnonblocking(int); //灏唖ocket璁剧疆涓洪潪闃诲
+	int socket_accept();
+	int socket_recv(int);
+	void user_logout(int);
+	int listen_st;
+	int socket_client[CLIENTCOUNT]; //鐢虫槑socket_client鏁扮粍锛岀鐞哻lient鐨剆ocket杩炴帴
+};
+
+
+
+#endif /* WORK_H_ */
+
+-----------------------------------------------------------------
+work.cpp
+-----------------------------------------------------------------
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/epoll.h>
+#include <arpa/inet.h>
+#include "work.h"
+
+work::work(int port)
+{
+	memset(socket_client, 0, sizeof(socket_client));
+	listen_st = socket_create(port); //鍒涘缓server绔痵ocket
+	if (listen_st == 0)
+		exit(-1); //鍒涘缓socket澶辫触锛岀▼搴忛��鍑�
+}
+
+work::~work()
+{
+
+}
+int work::socket_create(int port) //鍒涘缓鍙傛暟port鎸囧畾绔彛鍙风殑server绔痵ocket
+{
+	int st = socket(AF_INET, SOCK_STREAM, 0); //鍒涘缓TCP Socket
+	int on = 1;
+	if (setsockopt(st, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) == -1)
+	{
+		printf("setsockopt failed %s\n", strerror(errno));
+		return 0;
+	}
+	struct sockaddr_in addr;
+	memset(&addr, 0, sizeof(addr));
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(port);
+	addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	if (bind(st, (struct sockaddr *) &addr, sizeof(addr)) == -1)
+	{
+		printf("bind port %d failed %s\n", port, strerror(errno));
+		return 0;
+	}
+	if (listen(st, 300) == -1)
+	{
+		printf("listen failed %s\n", strerror(errno));
+		return 0;
+	}
+	return st; //杩斿洖listen鐨剆ocket鎻忚堪绗�
+}
+
+int work::setnonblocking(int st) //灏唖ocket璁剧疆涓洪潪闃诲
+{
+	int opts = fcntl(st, F_GETFL); //F_GETFL璇诲彇鏂囦欢鐘舵�佹爣蹇�
+	if (opts < 0)
+	{
+		printf("fcntl failed %s\n", strerror(errno));
+		return 0;
+	}
+	opts = opts | O_NONBLOCK;
+	if (fcntl(st, F_SETFL, opts) < 0) //F_SETFL琛ㄧず璁剧疆鏂囦欢鏍囧織
+	{
+		printf("fcntl failed %s\n", strerror(errno));
+		return 0;
+	}
+	return 1;
+}
+
+int work::socket_accept()
+{
+	struct sockaddr_in client_addr;
+	socklen_t len = sizeof(client_addr);
+	memset(&client_addr, 0, sizeof(client_addr));
+	int client_st = accept(listen_st, (struct sockaddr *) &client_addr, &len); //鎺ユ敹鍒版潵鑷猚lient鐨剆ocket杩炴帴
+
+	if (client_st < 0)
+		printf("accept failed %s\n", strerror(errno));
+	else
+		printf("accept by %s\n", inet_ntoa(client_addr.sin_addr));
+	return client_st; //杩斿洖鏉ヨ嚜client绔殑socket鎻忚堪绗�
+}
+
+int work::socket_recv(int st)
+{
+	struct msg_t msg;
+	memset(&msg, 0, sizeof(msg));
+	ssize_t rc = recv(st, (char *) &msg, sizeof(msg), 0); //鎺ユ敹鏉ヨ嚜client socket鍙戦�佹潵鐨勬秷鎭�
+	if (rc <= 0) //鎺ユ敹澶辫触
+	{
+		if (rc < 0)
+			printf("recv failed %s\n", strerror(errno));
+	}
+	else //鎺ユ敹鎴愬姛
+	{
+		puts(msg.body);
+		memset(&msg, 0, sizeof(msg));
+		strcpy(msg.body, "message from server");
+		send(st, (const char *) &msg, sizeof(msg.head), 0); //缁檆lient绔痵ocket涓嬪彂绯荤粺娑堟伅
+		return 0;
+	}
+}
+
+
+void work::user_logout(int st) //client socket杩炴帴鏂紑
+{
+for (int i = 0; i < CLIENTCOUNT; i++) //寰幆閬嶅巻socket_client[]鏁扮粍
+{
+	if (socket_client[i] == st) //鎵惧埌socket_client[]鏁扮粍 涓笌鐩哥瓑鐨刢lient socket
+	{
+		printf("userid=%d,socket disconn\n", i);
+		close(socket_client[i]); //鍏抽棴socket_client[]鏁扮粍涓浉搴旂殑socket
+		socket_client[i] = 0; //灏嗘暟缁剆ocket_client[]涓浉搴旂殑鍏冪礌鍒濆鍖栦负0锛屼互渚胯userid涓嬫杩樺彲浠ョ户缁櫥褰�
+		//broadcast_user_status(); //鍚憇ocket_client鏁扮粍涓墍鏈塻ocket骞挎挱鐢ㄦ埛鐘舵�佹秷鎭�
+		return;
+	}
+}
+}
+
+void work::run()
+{
+//澹版槑epoll_event缁撴瀯浣撶殑鍙橀噺,ev鐢ㄤ簬娉ㄥ唽浜嬩欢,鏁扮粍鐢ㄤ簬鍥炰紶瑕佸鐞嗙殑浜嬩欢
+struct epoll_event ev, events[CLIENTCOUNT];
+setnonblocking(listen_st); //璁剧疆鏈嶅姟绔痩isten鐨剆ocket涓洪潪闃诲
+int epfd = epoll_create(CLIENTCOUNT); //CLIENTCOUNT 琛ㄧずeppll涓瓨鏀緎ocket鐨勬渶澶у��
+ev.data.fd = listen_st; //灏唋isten_st鏀惧叆poll
+ev.events = EPOLLIN | EPOLLERR | EPOLLHUP; //閫夋嫨鐩戝惉鐨勪簨浠剁绫伙細璇锋眰|閿欒|鍏抽棴
+epoll_ctl(epfd, EPOLL_CTL_ADD, listen_st, &ev); //EPO_CTL_ADD琛ㄧず鎿嶄綔鏄線poll涓敞鍐屼簨浠�
+
+int st = 0;
+while (1)
+{
+	//epoll_wait闃诲锛岀洿鍒癳poll褰撲腑鐨剆ocket鏈夋寚瀹氱殑娑堟伅浜х敓
+	int nfds = epoll_wait(epfd, events, CLIENTCOUNT, -1); // -1琛ㄧず姘镐箙绛夊緟
+	if (nfds == -1)
+	{
+		printf("epoll_wait failed %s\n", strerror(errno));
+		break;
+	}
+
+	for (int i = 0; i < nfds; i++) //寰幆澶勭悊epoll_wait杩斿洖鎵�鏈夊嚭浜嬬殑socket
+	{
+		if (events[i].data.fd < 0)
+			continue;
+
+		if (events[i].data.fd == listen_st) //浠ｈ〃listenSt鏀跺埌浜嗘潵鑷鎴风鐨刢onnect
+		{
+			st = socket_accept();
+			if (st >= 0)
+			{
+				setnonblocking(st);
+				ev.data.fd = st;
+				ev.events = EPOLLIN | EPOLLERR | EPOLLHUP;
+				epoll_ctl(epfd, EPOLL_CTL_ADD, st, &ev);
+				continue;
+			}
+		}
+
+		if (events[i].events & EPOLLIN) //鏈夋潵鑷猚leint鐨勬暟鎹�
+		{
+			st = events[i].data.fd; //寰楀埌鏈夋暟鎹殑sokcet
+			if (socket_recv(st) <= 0)
+			{
+				user_logout(st);
+				events[i].data.fd = -1;
+			}
+		}
+
+		if (events[i].events & EPOLLERR) //鏈夋潵鑷猚leint鍑洪敊
+		{
+			st = events[i].data.fd; //寰楀埌鏈夋暟鎹殑sokcet
+			user_logout(st);
+			events[i].data.fd = -1;
+		}
+
+		if (events[i].events & EPOLLHUP) //鏈夋潵鑷猚leint鍏抽棴
+		{
+			st = events[i].data.fd; //寰楀埌鏈夋暟鎹殑sokcet
+			user_logout(st);
+			events[i].data.fd = -1;
+		}
+
+	}
+}
+close(epfd);
+}
+----------------------------------------------------------------
+main.cpp
+---------------------------------------------------------------
+//============================================================================
+// Name        : qqserver.cpp
+// Author      : zhujy
+// Version     :
+// Copyright   : Your copyright notice
+// Description : Hello World in C++, Ansi-style
+//============================================================================
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <errno.h>
+#include <signal.h>
+
+#include "work.h"
+
+int main(int arg, char *args[])
+{
+	if (arg < 2)
+	{
+		printf("usage:qqserverd port\n");
+		return -1;
+	}
+
+	int iport = atoi(args[1]);
+	if (iport == 0)
+	{
+		printf("port %d is invalid\n", iport);
+		return -1;
+	}
+
+	work w(iport);
+
+	printf("qqserver begin\n");
+
+	w.run();
+	printf("qqserver end\n");
+	return 0;
+}
